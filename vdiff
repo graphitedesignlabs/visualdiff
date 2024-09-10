@@ -26,14 +26,6 @@ if [ ! -f "cache/pdf1_page_000.png" ]; then
     # Convert PDF1 to greyscale images (one per page) and save to cache
     echo "Converting $pdf1 to greyscale images in cache..."
     convert -density 300 "$pdf1" -colorspace Gray "cache/pdf1_page_%03d.png"
-
-    # Convert pages to RGB after greyscale conversion
-    echo "Converting $pdf1 images in cache to RGB..."
-    for img in cache/pdf1_page_*.png; do
-        convert "$img" -colorspace RGB "$img"
-    done
-else
-    echo "Greyscale and RGB images for $pdf1 already exist in cache, skipping conversion."
 fi
 
 # Check if the first greyscale page for PDF2 already exists in the cache
@@ -41,22 +33,7 @@ if [ ! -f "cache/pdf2_page_000.png" ]; then
     # Convert PDF2 to greyscale images (one per page) and save to cache
     echo "Converting $pdf2 to greyscale images in cache..."
     convert -density 300 "$pdf2" -colorspace Gray "cache/pdf2_page_%03d.png"
-
-    # Convert pages to RGB after greyscale conversion
-    echo "Converting $pdf2 images in cache to RGB..."
-    for img in cache/pdf2_page_*.png; do
-        convert "$img" -colorspace RGB "$img"
-    done
-else
-    echo "Greyscale and RGB images for $pdf2 already exist in cache, skipping conversion."
 fi
-
-# Create a temp directory to store intermediate diff images
-mkdir -p diff_images
-
-# Create lookup tables (LUT) for red and blue gradients: black to red and black to blue
-convert -size 1x256 gradient:white-red "red_gradient.png"
-convert -size 1x256 gradient:white-blue "blue_gradient.png"
 
 # Get total page count
 page_count=$(ls cache/pdf1_page_*.png | wc -l)
@@ -66,35 +43,67 @@ if [ "$debug" == true ]; then
     page_count=$(($page_count < 30 ? $page_count : 30))
 fi
 
-# Loop through all the generated pages and apply color lookup and blending
+# Generate red and blue images if they don't exist
+if [ ! -f "cache/red_page_000.png" ]; then
+    echo "Generating red-tinted images for PDF1..."
+    convert -size 1x256 gradient:white-red "cache/red_gradient.png"
+    for ((i=0; i<$page_count; i++)); do
+        img=$(printf "cache/pdf1_page_%03d.png" $i)
+        page_num=$(basename "$img" | sed 's/pdf1_page_//' | sed 's/.png//')
+        convert "$img" -negate cache/red_gradient.png -clut "cache/red_page_$page_num.png"
+    done
+fi
+
+if [ ! -f "cache/blue_page_000.png" ]; then
+    echo "Generating blue-tinted images for PDF2..."
+    convert -size 1x256 gradient:white-blue "cache/blue_gradient.png"
+    for ((i=0; i<$page_count; i++)); do
+        img=$(printf "cache/pdf2_page_%03d.png" $i)
+        page_num=$(basename "$img" | sed 's/pdf2_page_//' | sed 's/.png//')
+        convert "$img" -negate cache/blue_gradient.png -clut "cache/blue_page_$page_num.png"
+    done
+fi
+
+# Create a temp directory to store intermediate images
+mkdir -p diff_images
+
+# Loop through all the generated pages and process them
 for ((i=0; i<$page_count; i++))
 do
     printf "Processing page %d of %d...\n" $((i+1)) $page_count
-    page1=$(printf "cache/pdf1_page_%03d.png" $i)
-    page2=$(printf "cache/pdf2_page_%03d.png" $i)
+    grey_page1=$(printf "cache/pdf1_page_%03d.png" $i)
+    grey_page2=$(printf "cache/pdf2_page_%03d.png" $i)
+    red_page=$(printf "cache/red_page_%03d.png" $i)
+    blue_page=$(printf "cache/blue_page_%03d.png" $i)
+    diff_page=$(printf "diff_images/diff_page_%03d.png" $i)
+    mask_page=$(printf "diff_images/mask_page_%03d.png" $i)
+    similar_page=$(printf "diff_images/similar_page_%03d.png" $i)
+    blended_page=$(printf "diff_images/blended_page_%03d.png" $i)
+    final_page=$(printf "diff_images/final_page_%03d.png" $i)
+
+    # Compute the difference between the two images to find similarities
+    convert "$grey_page1" "$grey_page2" -compose Difference -composite "$diff_page"
     
-    # Apply the red gradient to the first page using -clut
-    echo "Applying red gradient to page $i..."
-    convert "$page1" -negate red_gradient.png -clut "diff_images/red_page_$i.png"
-    
-    # Apply the blue gradient to the second page using -clut
-    echo "Applying blue gradient to page $i..."
-    convert "$page2" -negate blue_gradient.png -clut "diff_images/blue_page_$i.png"
-    
-    # Blend the two images using Blend with 50% opacity each
-    echo "Blending red and blue images at 50% for page $i..."
-    convert "diff_images/red_page_$i.png" "diff_images/blue_page_$i.png" -compose Blend -define compose:args=50,50 -composite "diff_images/diff_page_$i.png"
+    # Threshold to highlight identical areas
+    convert "$diff_page" -threshold 0 -negate "$mask_page"
+
+    # Mask the original image to show only similarities
+    convert "$grey_page1" "$mask_page" -compose CopyOpacity -composite "$similar_page"
+
+    # Blend red and blue images at 50%
+    convert "$red_page" "$blue_page" -compose Blend -define compose:args=50,50 -composite "$blended_page"
+
+    # Combine the blended red/blue image with the greyscale similarities using Darken
+    convert "$blended_page" "$similar_page" -compose Darken -composite "$final_page"
 done
 
-# Combine all the diff images into a single output PDF
-echo "Combining diff images into $output_pdf..."
-convert diff_images/diff_page_*.png "$output_pdf"
+# Combine all final images into a single output PDF
+echo "Combining final images into $output_pdf in the correct order..."
+convert $(ls diff_images/final_page_*.png | sort) "$output_pdf"
 
 # Clean up intermediate images
 echo "Cleaning up..."
-rm diff_images/red_page_*.png diff_images/blue_page_*.png
 rm -rf diff_images
-rm red_gradient.png blue_gradient.png
 
 echo "Done! The output is saved as $output_pdf."
 
