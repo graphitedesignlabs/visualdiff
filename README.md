@@ -1,7 +1,7 @@
 vdiff
 =====
 
-Tool for comparing similar PDFs and highlighting differences. 
+A tool for comparing similar PDFs and highlighting differences. 
 Renders an output PDF with unchanged details in grey-black, 
 additions in blue and subtractions in red. 
 
