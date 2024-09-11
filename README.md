@@ -18,8 +18,7 @@ brew install imagemagick ghostscript poppler
 Usage
 -----
 
-`./vdiff <file 1> <file 2> <output file> [--use-cache]`
+`./vdiff <pdf 1> <pdf 2> <output pdf> [--use-cache]`
 
-The `--use-cache` file persists a folder of process output files that will be
-reused on future runs with this flag.
+The `--use-cache` flag speeds up subsequent runs of the command by keeping a folder of rendered process files. Delete the `cache` folder or remove the flag to rerender from scratch.
 
