@@ -5,6 +5,11 @@ A tool for comparing similar PDFs and highlighting differences.
 Renders an output PDF with unchanged details in grey-black, 
 additions in blue and subtractions in red. 
 
+Example
+-------
+
+![Flow diagram](comparison_diagram.png)
+
 Prerequisites
 -------------
 
