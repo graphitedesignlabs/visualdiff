@@ -1,8 +1,32 @@
 #!/bin/bash
 
+# Function to display progress bar
+show_progress() {
+    local progress=$1
+    local total=$2
+    local bar_width=75  # Set progress bar width to 75 characters
+
+    # Calculate the percentage completed as an integer
+    local percent=$(awk "BEGIN {printf \"%d\", ($progress/$total)*100}")
+    
+    # Calculate the number of hashes for the progress bar
+    local num_hashes=$(awk "BEGIN {printf \"%d\", ($progress/$total)*$bar_width}")
+    
+    # Ensure num_hashes is at least 1
+    if [ "$num_hashes" -lt 1 ]; then
+        num_hashes=1
+    fi
+    
+    # Create the progress bar
+    local bar=$(printf "%.0s#" {1..5000} | cut -c1-$num_hashes)
+
+    # Print the progress bar and percentage as an integer
+    printf "\r[%-${bar_width}s] %s%%" "$bar" "$percent"
+}
+
 # Check if both PDFs are provided as arguments
 if [ "$#" -lt 3 ]; then
-    echo "Usage: $0 <input_pdf1> <input_pdf2> <output_pdf> [--debug]"
+    echo "Usage: $0 <input_pdf1> <input_pdf2> <output_pdf> [--use-cache]"
     exit 1
 fi
 
@@ -11,99 +35,162 @@ pdf1=$1
 pdf2=$2
 output_pdf=$3
 
-# Check if the debug flag is set
-debug=false
-if [ "$4" == "--debug" ]; then
-    debug=true
-    echo "Debug mode enabled. Limiting to 30 images."
+# Check if the use-cache flag is set
+use_cache=false
+if [ "$4" == "--use-cache" ]; then
+    use_cache=true
+    echo "Cache mode enabled. Cache will be preserved."
 fi
 
 # Create cache directory if it doesn't exist
 mkdir -p cache
 
-# Check if the first greyscale page for PDF1 already exists in the cache
-if [ ! -f "cache/pdf1_page_000.png" ]; then
-    # Convert PDF1 to greyscale images (one per page) and save to cache
-    echo "Converting $pdf1 to greyscale images in cache..."
-    convert -density 300 "$pdf1" -colorspace Gray "cache/pdf1_page_%03d.png"
+# Get the total number of pages in each PDF using pdfinfo
+total_pages_pdf1=$(pdfinfo "$pdf1" | grep Pages | awk '{print $2}')
+total_pages_pdf2=$(pdfinfo "$pdf2" | grep Pages | awk '{print $2}')
+
+# Ensure both PDFs have the same number of pages
+if [ "$total_pages_pdf1" -ne "$total_pages_pdf2" ]; then
+    echo "Error: The two PDFs do not have the same number of pages."
+    exit 1
 fi
 
-# Check if the first greyscale page for PDF2 already exists in the cache
-if [ ! -f "cache/pdf2_page_000.png" ]; then
-    # Convert PDF2 to greyscale images (one per page) and save to cache
-    echo "Converting $pdf2 to greyscale images in cache..."
-    convert -density 300 "$pdf2" -colorspace Gray "cache/pdf2_page_%03d.png"
-fi
+page_count=$total_pages_pdf1
 
-# Get total page count
-page_count=$(ls cache/pdf1_page_*.png | wc -l)
+# Output the page count
+echo "Page count: $page_count"
 
-# If in debug mode, limit the number of pages to 30
-if [ "$debug" == true ]; then
-    page_count=$(($page_count < 30 ? $page_count : 30))
-fi
+# Function to reset progress
+reset_progress() {
+    echo 0 > "$progress_file"
+}
 
-# Generate red and blue images if they don't exist
-if [ ! -f "cache/red_page_000.png" ]; then
-    echo "Generating red-tinted images for PDF1..."
-    convert -size 1x256 gradient:white-red "cache/red_gradient.png"
-    for ((i=0; i<$page_count; i++)); do
-        img=$(printf "cache/pdf1_page_%03d.png" $i)
-        page_num=$(basename "$img" | sed 's/pdf1_page_//' | sed 's/.png//')
-        convert "$img" -negate cache/red_gradient.png -clut "cache/red_page_$page_num.png"
-    done
-fi
+# Progress file to track completed tasks
+progress_file=$(mktemp)
 
-if [ ! -f "cache/blue_page_000.png" ]; then
-    echo "Generating blue-tinted images for PDF2..."
-    convert -size 1x256 gradient:white-blue "cache/blue_gradient.png"
-    for ((i=0; i<$page_count; i++)); do
-        img=$(printf "cache/pdf2_page_%03d.png" $i)
-        page_num=$(basename "$img" | sed 's/pdf2_page_//' | sed 's/.png//')
-        convert "$img" -negate cache/blue_gradient.png -clut "cache/blue_page_$page_num.png"
-    done
-fi
+# Update progress after each task
+update_progress() {
+    local total=$1
+    local progress=$(cat "$progress_file")
+    progress=$((progress + 1))
+    echo "$progress" > "$progress_file"
+    show_progress "$progress" "$total"
+}
 
-# Create a temp directory to store intermediate images
-mkdir -p diff_images
+# Convert PDF1 and PDF2 to greyscale page by page
+echo "Converting to greyscale..."
+reset_progress  # Reset progress before starting
 
-# Loop through all the generated pages and process them
-for ((i=0; i<$page_count; i++))
-do
-    printf "Processing page %d of %d...\n" $((i+1)) $page_count
-    grey_page1=$(printf "cache/pdf1_page_%03d.png" $i)
-    grey_page2=$(printf "cache/pdf2_page_%03d.png" $i)
-    red_page=$(printf "cache/red_page_%03d.png" $i)
-    blue_page=$(printf "cache/blue_page_%03d.png" $i)
-    diff_page=$(printf "diff_images/diff_page_%03d.png" $i)
-    mask_page=$(printf "diff_images/mask_page_%03d.png" $i)
-    similar_page=$(printf "diff_images/similar_page_%03d.png" $i)
-    blended_page=$(printf "diff_images/blended_page_%03d.png" $i)
-    final_page=$(printf "diff_images/final_page_%03d.png" $i)
+for ((i=1; i<=$page_count; i++)); do
+    pdf1_grey="cache/pdf1_page_$(printf '%03d' $i).png"
+    pdf2_grey="cache/pdf2_page_$(printf '%03d' $i).png"
+
+    if [ "$use_cache" == false ] || [ ! -f "$pdf1_grey" ]; then
+        magick -density 300 "$pdf1[$((i-1))]" -colorspace Gray "$pdf1_grey"
+    fi
+
+    if [ "$use_cache" == false ] || [ ! -f "$pdf2_grey" ]; then
+        magick -density 300 "$pdf2[$((i-1))]" -colorspace Gray "$pdf2_grey"
+    fi
+
+    update_progress "$page_count"
+done
+echo ""
+
+# Generate red-tinted images for PDF1
+echo "Generating red-tinted images for PDF1..."
+reset_progress  # Reset progress before starting
+
+magick -size 1x256 gradient:white-red "cache/red_gradient.png"
+for ((i=1; i<=$page_count; i++)); do
+    img="cache/pdf1_page_$(printf '%03d' $i).png"
+    red_img="cache/red_page_$(printf '%03d' $i).png"
+    if [ "$use_cache" == false ] || [ ! -f "$red_img" ]; then
+        magick "$img" -negate cache/red_gradient.png -clut "$red_img"
+    fi
+    update_progress "$page_count"
+done
+echo ""
+
+# Generate blue-tinted images for PDF2
+echo "Generating blue-tinted images for PDF2..."
+reset_progress  # Reset progress before starting
+
+magick -size 1x256 gradient:white-blue "cache/blue_gradient.png"
+for ((i=1; i<=$page_count; i++)); do
+    img="cache/pdf2_page_$(printf '%03d' $i).png"
+    blue_img="cache/blue_page_$(printf '%03d' $i).png"
+    if [ "$use_cache" == false ] || [ ! -f "$blue_img" ]; then
+        magick "$img" -negate cache/blue_gradient.png -clut "$blue_img"
+    fi
+    update_progress "$page_count"
+done
+echo ""
+
+# Combine and process the images, store everything in the cache folder
+echo "Processing pages and combining outputs..."
+reset_progress  # Reset progress before starting
+
+for ((i=1; i<=$page_count; i++)); do
+    grey_page1="cache/pdf1_page_$(printf '%03d' $i).png"
+    grey_page2="cache/pdf2_page_$(printf '%03d' $i).png"
+    red_page="cache/red_page_$(printf '%03d' $i).png"
+    blue_page="cache/blue_page_$(printf '%03d' $i).png"
+    
+    final_page="cache/final_page_$(printf '%03d' $i).png"
+
+    if [ "$use_cache" == true ] && [ -f "$final_page" ]; then
+        update_progress "$page_count"  # Increment progress even if the file already exists (cache hit)
+        continue
+    fi
+
+    diff_page="cache/diff_page_$(printf '%03d' $i).png"
+    mask_page="cache/mask_page_$(printf '%03d' $i).png"
+    similar_page="cache/similar_page_$(printf '%03d' $i).png"
+    blended_page="cache/blended_page_$(printf '%03d' $i).png"
 
     # Compute the difference between the two images to find similarities
-    convert "$grey_page1" "$grey_page2" -compose Difference -composite "$diff_page"
+    magick "$grey_page1" "$grey_page2" -compose Difference -composite "$diff_page"
     
     # Threshold to highlight identical areas
-    convert "$diff_page" -threshold 0 -negate "$mask_page"
+    magick "$diff_page" -threshold 0 -negate "$mask_page"
 
     # Mask the original image to show only similarities
-    convert "$grey_page1" "$mask_page" -compose CopyOpacity -composite "$similar_page"
+    magick "$grey_page1" "$mask_page" -compose CopyOpacity -composite "$similar_page"
 
     # Blend red and blue images at 50%
-    convert "$red_page" "$blue_page" -compose Blend -define compose:args=50,50 -composite "$blended_page"
+    magick "$red_page" "$blue_page" -compose Blend -define compose:args=50,50 -composite "$blended_page"
 
     # Combine the blended red/blue image with the greyscale similarities using Darken
-    convert "$blended_page" "$similar_page" -compose Darken -composite "$final_page"
+    magick "$blended_page" "$similar_page" -compose Darken -composite "$final_page"
+
+    update_progress "$page_count"
 done
+echo ""
 
 # Combine all final images into a single output PDF
-echo "Combining final images into $output_pdf in the correct order..."
-convert $(ls diff_images/final_page_*.png | sort) "$output_pdf"
+echo "Combining final images into $output_pdf..."
+magick $(ls cache/final_page_*.png | sort) "$output_pdf"
+
+# Compress the final PDF using Ghostscript with PDF compatibility level 1.5 and higher compression (/screen or /ebook)
+compressed_output="compressed_output.pdf"
+echo "Compressing final PDF for higher compression..."
+gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.5 -dPDFSETTINGS=/ebook -dNOPAUSE -dQUIET -dBATCH -sOutputFile="$compressed_output" "$output_pdf"
+
+# Move the compressed PDF to overwrite the original output PDF
+mv "$compressed_output" "$output_pdf"
 
 # Clean up intermediate images
 echo "Cleaning up..."
-rm -rf diff_images
 
-echo "Done! The output is saved as $output_pdf."
+# Remove the cache folder unless --use-cache flag is present
+if [ "$use_cache" == false ]; then
+    echo "Removing cache folder..."
+    rm -rf cache
+fi
+
+# Clean up progress file
+rm "$progress_file"
+
+echo "Done! The output is saved as $output"
 
