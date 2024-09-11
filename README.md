@@ -20,5 +20,5 @@ Usage
 
 `./vdiff <pdf 1> <pdf 2> <output pdf> [--use-cache]`
 
-The `--use-cache` flag speeds up subsequent runs of the command by keeping a folder of rendered process files. Delete the `cache` folder or remove the flag to rerender from scratch.
+The `--use-cache` flag speeds up subsequent runs by reusing previously rendered process files. Delete the `cache` folder or remove the flag to rerender from scratch.
 
