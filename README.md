@@ -2,8 +2,8 @@ vdiff
 =====
 
 A tool for comparing similar PDFs and highlighting differences. 
-Renders an output PDF with unchanged details in grey-black, 
-additions in blue and subtractions in red. 
+The system reduces both PDFs to greyscale and renders an output PDF with 
+additions in blue, subtractions in red, and unchanged areas in grey. 
 
 Example
 -------
